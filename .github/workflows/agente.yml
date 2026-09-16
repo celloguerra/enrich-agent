@@ -1,0 +1,43 @@
+name: Agente de Enriquecimento de Produtos
+
+on:
+  # Permite que você clique num botão para rodar manualmente quando quiser
+  workflow_dispatch:
+  
+  # Agendamento: Roda automaticamente todo dia às 6h da manhã (horário de Brasília)
+  schedule:
+    - cron: '0 9 * * *'
+
+jobs:
+  executar-agente:
+    runs-on: ubuntu-latest
+    
+    steps:
+      # 1. Baixa o seu código do repositório
+      - name: Checkout do código
+        uses: actions/checkout@v4
+
+      # 2. Instala o Python na máquina do GitHub
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 3. Instala as bibliotecas (openai, tavily, pandas, python-dotenv, etc.)
+      - name: Instalar dependências
+        run: pip install -r requirements.txt
+
+      # 4. Roda o seu script, injetando as chaves secretas com segurança
+      - name: Executar Agente
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+        run: python agent.py
+
+      # 5. Salva a planilha gerada para você baixar depois
+      - name: Salvar planilha como artefato
+        if: always() # Salva mesmo se der erro em algum produto, para você ver até onde foi
+        uses: actions/upload-artifact@v4
+        with:
+          name: planilha-enriquecida
+          path: produtos_enriquecidos.xlsx
