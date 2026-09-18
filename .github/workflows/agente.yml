@@ -1,43 +1,114 @@
 name: Agente de Enriquecimento de Produtos
 
 on:
-  # Permite que você clique num botão para rodar manualmente quando quiser
+  # Botão "Run workflow" para disparar manualmente, com parâmetros opcionais.
   workflow_dispatch:
-  
-  # Agendamento: Roda automaticamente todo dia às 6h da manhã (horário de Brasília)
+    inputs:
+      max_minutos:
+        description: 'Orçamento de tempo desta execução (minutos)'
+        required: false
+        default: '330'
+      workers:
+        description: 'Produtos processados em paralelo'
+        required: false
+        default: '6'
+      partes:
+        description: 'Partes a processar (vazio = todas). Ex.: parte_1,parte_2'
+        required: false
+        default: ''
+      limite:
+        description: 'Máx. de produtos por parte (0 = todos). Útil para testar.'
+        required: false
+        default: '0'
+
+  # Roda todo dia às 6h de Brasília (9h UTC). Como o agente é retomável, cada
+  # execução avança o trabalho até o catálogo inteiro estar enriquecido.
   schedule:
     - cron: '0 9 * * *'
+
+# Impede duas execuções simultâneas: elas escreveriam no mesmo estado e
+# entrariam em conflito no commit de volta.
+concurrency:
+  group: enriquecimento-produtos
+  cancel-in-progress: false
+
+# Necessário para o passo que devolve o progresso ao repositório.
+permissions:
+  contents: write
 
 jobs:
   executar-agente:
     runs-on: ubuntu-latest
-    
+    # Um pouco acima do orçamento do agente (330 min), para sobrar tempo de
+    # commit e upload de artefatos.
+    timeout-minutes: 360
+
     steps:
-      # 1. Baixa o seu código do repositório
       - name: Checkout do código
         uses: actions/checkout@v4
+        with:
+          # Histórico completo: necessário para o git pull --rebase do passo
+          # que devolve o progresso ao repositório.
+          fetch-depth: 0
 
-      # 2. Instala o Python na máquina do GitHub
       - name: Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
 
-      # 3. Instala as bibliotecas (openai, tavily, pandas, python-dotenv, etc.)
       - name: Instalar dependências
-        run: pip install -r requirements.txt
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-      # 4. Roda o seu script, injetando as chaves secretas com segurança
-      - name: Executar Agente
+      # Garante que as partes existam mesmo que não tenham sido commitadas.
+      - name: Gerar partes do CSV
+        run: python breaker.py --chunk-size 1000
+
+      - name: Executar agente
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
+          MAX_MINUTOS: ${{ inputs.max_minutos || '330' }}
+          WORKERS: ${{ inputs.workers || '6' }}
+          PARTES: ${{ inputs.partes || '' }}
+          LIMITE: ${{ inputs.limite || '0' }}
         run: python agent.py
 
-      # 5. Salva a planilha gerada para você baixar depois
-      - name: Salvar planilha como artefato
-        if: always() # Salva mesmo se der erro em algum produto, para você ver até onde foi
+      - name: Publicar resumo no sumário do job
+        if: always()
+        run: |
+          echo '## Progresso do enriquecimento' >> "$GITHUB_STEP_SUMMARY"
+          if [ -f saida/progresso.json ]; then
+            echo '```json' >> "$GITHUB_STEP_SUMMARY"
+            cat saida/progresso.json >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo '_Nenhum progresso gravado._' >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      # Devolve estado + planilhas ao repositório para a próxima execução
+      # retomar de onde parou. [skip ci] evita disparar um novo workflow.
+      - name: Commitar progresso de volta ao repositório
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          mkdir -p saida
+          git add saida parte_*.csv
+          if git diff --cached --quiet; then
+            echo "Nenhuma alteração para commitar."
+          else
+            git commit -m "chore: progresso do enriquecimento [skip ci]"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
+
+      - name: Salvar planilhas como artefato
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: planilha-enriquecida
-          path: produtos_enriquecidos.xlsx
+          name: produtos-enriquecidos
+          path: saida/
+          if-no-files-found: warn
+          retention-days: 30

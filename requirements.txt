@@ -2,3 +2,4 @@ openai
 tavily-python
 pandas
 openpyxl
+python-dotenv

@@ -1,3 +1,14 @@
 .env
 __pycache__/
 *.xlsx
+
+# As planilhas geradas pelo agente precisam ser versionadas: são o estado que
+# permite à próxima execução do GitHub Actions retomar de onde parou.
+!saida/*.xlsx
+
+# Scaffolding local de validação (contém um stub de pandas que não deve ir
+# para o repositório nem para o CI).
+_teste_agente.py
+_teste_csv_real.py
+_teste_stubs/
+_teste_tmp/
