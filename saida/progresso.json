@@ -1,0 +1,75 @@
+{
+  "atualizado_em": "2026-09-19T16:53:54+00:00",
+  "duracao_segundos": 14614.1,
+  "completo": true,
+  "total_produtos": 4230,
+  "enriquecidos": 4230,
+  "restantes": 0,
+  "partes": [
+    {
+      "parte": "parte_1.csv",
+      "total": 1000,
+      "enriquecidos": 1000,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 994,
+      "erros_nesta_execucao": 0,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_1.xlsx",
+        "saida/produtos_enriquecidos_parte_1.csv"
+      ]
+    },
+    {
+      "parte": "parte_2.csv",
+      "total": 1000,
+      "enriquecidos": 1000,
+      "ok": 999,
+      "com_erro": 1,
+      "novos_nesta_execucao": 1000,
+      "erros_nesta_execucao": 1,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_2.xlsx",
+        "saida/produtos_enriquecidos_parte_2.csv"
+      ]
+    },
+    {
+      "parte": "parte_3.csv",
+      "total": 1000,
+      "enriquecidos": 1000,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 1000,
+      "erros_nesta_execucao": 0,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_3.xlsx",
+        "saida/produtos_enriquecidos_parte_3.csv"
+      ]
+    },
+    {
+      "parte": "parte_4.csv",
+      "total": 1000,
+      "enriquecidos": 1000,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 1000,
+      "erros_nesta_execucao": 0,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_4.xlsx",
+        "saida/produtos_enriquecidos_parte_4.csv"
+      ]
+    },
+    {
+      "parte": "parte_5.csv",
+      "total": 230,
+      "enriquecidos": 230,
+      "ok": 230,
+      "com_erro": 0,
+      "novos_nesta_execucao": 230,
+      "erros_nesta_execucao": 0,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_5.xlsx",
+        "saida/produtos_enriquecidos_parte_5.csv"
+      ]
+    }
+  ]
+}
