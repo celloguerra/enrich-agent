@@ -1,6 +1,6 @@
 {
-  "atualizado_em": "2026-09-19T16:53:54+00:00",
-  "duracao_segundos": 14614.1,
+  "atualizado_em": "2026-09-20T13:25:29+00:00",
+  "duracao_segundos": 17.5,
   "completo": true,
   "total_produtos": 4230,
   "enriquecidos": 4230,
@@ -12,7 +12,7 @@
       "enriquecidos": 1000,
       "ok": 1000,
       "com_erro": 0,
-      "novos_nesta_execucao": 994,
+      "novos_nesta_execucao": 0,
       "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_1.xlsx",
@@ -23,10 +23,10 @@
       "parte": "parte_2.csv",
       "total": 1000,
       "enriquecidos": 1000,
-      "ok": 999,
-      "com_erro": 1,
-      "novos_nesta_execucao": 1000,
-      "erros_nesta_execucao": 1,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 1,
+      "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_2.xlsx",
         "saida/produtos_enriquecidos_parte_2.csv"
@@ -38,7 +38,7 @@
       "enriquecidos": 1000,
       "ok": 1000,
       "com_erro": 0,
-      "novos_nesta_execucao": 1000,
+      "novos_nesta_execucao": 0,
       "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_3.xlsx",
@@ -51,7 +51,7 @@
       "enriquecidos": 1000,
       "ok": 1000,
       "com_erro": 0,
-      "novos_nesta_execucao": 1000,
+      "novos_nesta_execucao": 0,
       "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_4.xlsx",
@@ -64,7 +64,7 @@
       "enriquecidos": 230,
       "ok": 230,
       "com_erro": 0,
-      "novos_nesta_execucao": 230,
+      "novos_nesta_execucao": 0,
       "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_5.xlsx",
