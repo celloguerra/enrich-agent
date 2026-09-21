@@ -1,6 +1,6 @@
 {
-  "atualizado_em": "2026-09-20T13:25:29+00:00",
-  "duracao_segundos": 17.5,
+  "atualizado_em": "2026-09-21T15:36:37+00:00",
+  "duracao_segundos": 0.9,
   "completo": true,
   "total_produtos": 4230,
   "enriquecidos": 4230,
@@ -25,7 +25,7 @@
       "enriquecidos": 1000,
       "ok": 1000,
       "com_erro": 0,
-      "novos_nesta_execucao": 1,
+      "novos_nesta_execucao": 0,
       "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_2.xlsx",
