@@ -12,3 +12,6 @@ _teste_agente.py
 _teste_csv_real.py
 _teste_stubs/
 _teste_tmp/
+
+# Consolidado de pendentes, regenerável com filtrar_pendentes.py.
+teste_final.csv

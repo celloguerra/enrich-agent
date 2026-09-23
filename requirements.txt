@@ -1,5 +1,5 @@
 openai
-tavily-python
+firecrawl>=4.4,<5
 pandas
 openpyxl
 python-dotenv

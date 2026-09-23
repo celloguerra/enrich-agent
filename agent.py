@@ -1,7 +1,7 @@
 """Agente de enriquecimento de produtos.
 
 Lê as partes CSV (``parte_*.csv``) versionadas no repositório, pesquisa cada
-produto na web (Tavily), extrai os dados com IA (OpenRouter) e grava uma
+produto na web (Firecrawl), extrai os dados com IA (OpenRouter) e grava uma
 planilha enriquecida por parte em ``./saida/``.
 
 Pensado para rodar sem intervenção humana no GitHub Actions:
@@ -94,7 +94,7 @@ REGRAS IMPORTANTES:
 
 # Preenchidos por inicializar_clientes()
 cliente_ia: Any = None
-cliente_busca: Any = None
+cliente_firecrawl: Any = None
 
 
 def _aplicar_patch_ipv4() -> None:
@@ -124,19 +124,17 @@ def _aplicar_patch_ipv4() -> None:
 
 def inicializar_clientes() -> None:
     """Cria os clientes de IA e de busca a partir das variáveis de ambiente."""
-    global cliente_ia, cliente_busca
-
+    global cliente_ia, cliente_firecrawl
     from openai import OpenAI
-    from tavily import TavilyClient
+    from firecrawl import Firecrawl
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    tavily_key = os.getenv("TAVILY_API_KEY")
-
+    firecrawl_key = os.getenv("FIRECRAWL_API_KEY")
     faltando = [
         nome
         for nome, valor in (
             ("OPENROUTER_API_KEY", openrouter_key),
-            ("TAVILY_API_KEY", tavily_key),
+            ("FIRECRAWL_API_KEY", firecrawl_key),
         )
         if not valor
     ]
@@ -147,13 +145,74 @@ def inicializar_clientes() -> None:
             + ". Defina-as no ambiente (ou num arquivo .env local)."
         )
 
+    # O OpenRouter responde 401 "Missing Authentication header" quando o bearer
+    # não é uma chave dele (ex.: placeholder exportado sem querer). O aviso
+    # abaixo torna esse caso óbvio antes de qualquer chamada real.
+    if "openrouter.ai" in OPENROUTER_BASE_URL and not openrouter_key.startswith("sk-or-"):
+        print(
+            "   ⚠️ OPENROUTER_API_KEY não parece uma chave do OpenRouter "
+            f"(começa com '{openrouter_key[:8]}…'; esperado prefixo 'sk-or-'). "
+            "Gere uma chave real em https://openrouter.ai/keys.",
+            flush=True,
+        )
+
     cliente_ia = OpenAI(
         base_url=OPENROUTER_BASE_URL,
         api_key=openrouter_key,
         max_retries=2,
         timeout=120.0,
     )
-    cliente_busca = TavilyClient(api_key=tavily_key)
+    cliente_firecrawl = Firecrawl(api_key=firecrawl_key)
+
+    _preflight_openrouter()
+    _preflight_firecrawl()
+
+
+def _preflight_openrouter() -> None:
+    """Chamada mínima ao OpenRouter para falhar rápido com mensagem clara.
+
+    Sem isso uma chave inválida só seria descoberta produto a produto, depois
+    de minutos de retries (401 "Missing Authentication header").
+    """
+    try:
+        _com_retry(
+            lambda: cliente_ia.chat.completions.create(
+                model=MODELO,
+                messages=[{"role": "user", "content": "ping"}],
+                max_tokens=1,
+            ),
+            "verificação do OpenRouter",
+            tentativas=2,
+            espera_inicial=1.0,
+        )
+    except Exception as erro:  # noqa: BLE001
+        raise SystemExit(
+            "⚠️ O OpenRouter recusou a chamada de teste — nenhum produto seria "
+            "enriquecido nesta execução.\n"
+            f"   erro: {erro}\n"
+            "   Confira OPENROUTER_API_KEY (gere em https://openrouter.ai/keys) "
+            f"e o identificador do modelo MODELO='{MODELO}'."
+        ) from erro
+    print("   🔑 OpenRouter: credencial e modelo OK.", flush=True)
+
+
+def _preflight_firecrawl() -> None:
+    """Consulta o saldo de créditos do Firecrawl (não consome créditos)."""
+    try:
+        uso = cliente_firecrawl.get_credit_usage()
+        restantes = getattr(uso, "remaining_credits", None)
+        if restantes is not None:
+            print(f"   🔑 Firecrawl: credencial OK ({restantes} créditos restantes).", flush=True)
+        else:
+            print("   🔑 Firecrawl: credencial OK.", flush=True)
+    except Exception as erro:  # noqa: BLE001
+        raise SystemExit(
+            "⚠️ O Firecrawl recusou a verificação de credencial — as buscas "
+            "falhariam para todos os produtos.\n"
+            f"   erro: {erro}\n"
+            "   Confira FIRECRAWL_API_KEY (gere em https://firecrawl.dev)."
+        ) from erro
+
 
 
 # ==========================================
@@ -256,59 +315,80 @@ def montar_consulta(linha: dict) -> str:
 
 
 def pesquisar_na_web(consulta: str) -> dict:
-    """Busca textos e links usando Tavily."""
+    """Busca textos e links usando Firecrawl (SDK v2).
+
+    A busca principal pede o conteúdo das páginas (``scrape_options``) para dar
+    contexto à IA; as buscas de manual e de fotos devolvem apenas links, que
+    são mais baratas. Os resultados chegam como ``SearchData`` com as listas
+    ``.web`` e ``.images`` (``SearchResultWeb``/``Document``/``SearchResultImages``).
+    """
+
+    def _titulo(fonte) -> str:
+        titulo = getattr(fonte, "title", None)
+        if not titulo:
+            titulo = getattr(getattr(fonte, "metadata", None), "title", None)
+        return _texto(titulo)
+
+    def _url(fonte) -> str:
+        url = getattr(fonte, "url", None)
+        if not url:
+            url = getattr(getattr(fonte, "metadata", None), "url", None)
+        return _texto(url)
+
+    def _conteudo(fonte) -> str:
+        return _texto(
+            getattr(fonte, "markdown", None) or getattr(fonte, "description", None)
+        )
+
     contexto_texto = ""
 
     try:
         resultado = _com_retry(
-            lambda: cliente_busca.search(
-                query=f"{consulta} especificações técnicas manual",
-                max_results=5,
-                search_depth="advanced",
-                include_raw_content=False,
+            lambda: cliente_firecrawl.search(
+                f"{consulta} especificações técnicas manual",
+                limit=5,
+                scrape_options={"formats": ["markdown"], "only_main_content": True},
             ),
             "busca principal",
         )
-
-        for fonte in resultado.get("results", []):
-            contexto_texto += f"\n--- Fonte: {fonte.get('title', '')} (URL: {fonte.get('url', '')}) ---\n"
-            contexto_texto += _texto(fonte.get("content"))[:2000]
-            contexto_texto += "\n"
+        for fonte in getattr(resultado, "web", None) or []:
+            contexto_texto += (
+                f"\n--- Fonte: {_titulo(fonte)} (URL: {_url(fonte)}) ---\n"
+                f"{_conteudo(fonte)[:2000]}\n"
+            )
 
         if BUSCAR_MANUAL:
             resultado_manual = _com_retry(
-                lambda: cliente_busca.search(
-                    query=f"{consulta} manual do usuário PDF",
-                    max_results=3,
-                    search_depth="basic",
+                lambda: cliente_firecrawl.search(
+                    f"{consulta} manual do usuário PDF",
+                    limit=3,
                 ),
                 "busca de manual",
             )
-            if resultado_manual.get("results"):
+            if getattr(resultado_manual, "web", None):
                 contexto_texto += "\n=== POSSÍVEIS MANUAIS ===\n"
-                for fonte in resultado_manual["results"]:
-                    contexto_texto += f"- {fonte.get('title', '')} (Link: {fonte.get('url', '')})\n"
+                for fonte in resultado_manual.web:
+                    contexto_texto += f"- {_titulo(fonte)} (Link: {_url(fonte)})\n"
 
     except Exception as erro:  # noqa: BLE001
-        print(f"   ⚠️ Erro na busca Tavily: {erro}", flush=True)
+        print(f"   ⚠️ Erro na busca Firecrawl: {erro}", flush=True)
         contexto_texto = contexto_texto or "Erro ao buscar na web."
 
     fotos = []
     if BUSCAR_FOTOS:
         try:
             resultado_fotos = _com_retry(
-                lambda: cliente_busca.search(
-                    query=f"{consulta} produto imagem oficial",
-                    max_results=3,
-                    search_depth="basic",
+                lambda: cliente_firecrawl.search(
+                    f"{consulta} produto imagem oficial",
+                    sources=["images"],
+                    limit=3,
                 ),
                 "busca de fotos",
             )
-            fotos = [
-                fonte["url"]
-                for fonte in resultado_fotos.get("results", [])
-                if fonte.get("url")
-            ]
+            for imagem in getattr(resultado_fotos, "images", None) or []:
+                url = _texto(getattr(imagem, "image_url", None)) or _url(imagem)
+                if url and url not in fotos:
+                    fotos.append(url)
         except Exception as erro:  # noqa: BLE001
             print(f"   ⚠️ Erro na busca de fotos: {erro}", flush=True)
 
@@ -500,7 +580,19 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
     if args.limite:
         pendentes = pendentes[: args.limite]
 
-    total = len(linhas)
+    ids_no_csv = {
+        chave
+        for chave in (_texto(linha.get("idsubproduto")) for linha in linhas)
+        if chave
+    }
+    # Produtos concluídos em execuções anteriores que não estão mais no CSV
+    # (ex.: partes filtradas para conter só pendentes). Seguem na contagem e
+    # na planilha — o estado é a memória completa da parte.
+    registros_fora_do_csv = [
+        registro for chave, registro in estado.items() if chave not in ids_no_csv
+    ]
+
+    total = len(linhas) + len(registros_fora_do_csv)
     print(
         f"\n📦 {parte.name}: {total} produtos | "
         f"{total - len(pendentes)} já prontos | {len(pendentes)} a processar",
@@ -515,7 +607,6 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
     if pendentes:
         arquivo_estado.parent.mkdir(parents=True, exist_ok=True)
         with arquivo_estado.open("a", encoding="utf-8") as arquivo:
-
             def gravar(registro):
                 with trava:
                     arquivo.write(json.dumps(registro, ensure_ascii=False) + "\n")
@@ -528,7 +619,7 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                     if contador["novos"] % 10 == 0:
                         print(
                             f"   💾 {parte.stem}: {contador['novos']}/{len(pendentes)} "
-                            f"gravados no estado",
+                            "gravados no estado",
                             flush=True,
                         )
 
@@ -580,12 +671,16 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                             flush=True,
                         )
 
-    # Reconstitui a parte inteira na ordem original do CSV.
+    # Reconstitui a parte inteira na ordem original do CSV, mais os produtos
+    # que saíram do CSV mas já estavam prontos no estado. Feito fora do
+    # "if pendentes" para a planilha e o resumo saírem mesmo numa execução
+    # de retomada sem produtos novos.
     registros_finais = [
         estado[chave]
         for chave in (_texto(linha.get("idsubproduto")) for linha in linhas)
         if chave and chave in estado
     ]
+    registros_finais += registros_fora_do_csv
 
     destino = SAIDA_DIR / f"produtos_enriquecidos_{parte.stem}"
     caminho_xlsx, caminho_csv = salvar_planilhas(registros_finais, destino)
@@ -747,4 +842,12 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print(
+            "\n⏹️ Interrompido pelo usuário — o progresso gravado em ./saida/ "
+            "foi preservado e a próxima execução retoma de onde parou.",
+            flush=True,
+        )
+        sys.exit(130)
