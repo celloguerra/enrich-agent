@@ -231,6 +231,16 @@ def _texto(valor) -> str:
     return "" if texto.lower() in {"nan", "none", "nat"} else texto
 
 
+def campo_vazio(valor) -> bool:
+    """Campo sem conteúdo real: vazio ou marcado como “Não encontrado”.
+
+    Mesma regra da auditoria (``auditar_enriquecimento.py``): texto que anuncia
+    ausência de dado não conta como preenchido.
+    """
+    texto = _texto(valor)
+    return (not texto) or bool(re.search(r"n[ãa]o\s+encontrad", texto, re.IGNORECASE))
+
+
 def _links(valor) -> list:
     """Normaliza o campo de fotos da IA para uma lista de URLs."""
     if valor is None:
@@ -433,8 +443,15 @@ def enriquecer_com_ia(nome_produto: str, contexto: dict) -> dict:
     return dados
 
 
-def processar_produto(linha: dict, tentativas: int) -> dict:
-    """Pesquisa + IA para um produto, já no formato final de gravação."""
+def processar_produto(linha: dict, tentativas: int, anterior: dict | None = None) -> dict:
+    """Pesquisa + IA para um produto, já no formato final de gravação.
+
+    Com ``anterior`` (o registro que o produto já tinha no estado), campos
+    preenchidos de rodadas anteriores são preservados: a nova rodada só
+    preenche o que está vazio ou marcado como “Não encontrado”. Fotos são
+    somadas, sem duplicar.
+    """
+    anterior = anterior or {}
     registro = {
         "idsubproduto": _texto(linha.get("idsubproduto")),
         "nome_produto": _texto(linha.get("descricaoproduto")),
@@ -451,6 +468,16 @@ def processar_produto(linha: dict, tentativas: int) -> dict:
         "tentativas": tentativas,
         "atualizado_em": _agora(),
     }
+    for campo in (
+        "descricao_produto",
+        "especificacao_tecnica",
+        "pagina_web",
+        "manual",
+        "fotos",
+    ):
+        preservado = _texto(anterior.get(campo))
+        if not campo_vazio(preservado):
+            registro[campo] = preservado
 
     consulta = montar_consulta(linha)
     if not consulta:
@@ -461,11 +488,22 @@ def processar_produto(linha: dict, tentativas: int) -> dict:
         contexto = pesquisar_na_web(consulta)
         dados = enriquecer_com_ia(registro["nome_produto"] or consulta, contexto)
 
-        registro["descricao_produto"] = _texto(dados.get("descricao_produto"))
-        registro["especificacao_tecnica"] = _texto(dados.get("especificacao_tecnica"))
-        registro["pagina_web"] = _texto(dados.get("pagina_web")) or "Não encontrado"
-        registro["manual"] = _texto(dados.get("manual")) or "Não encontrado"
-        registro["fotos"] = " | ".join(_links(dados.get("fotos")))
+        # Só preenche o que era lacuna: o que já veio de rodada anterior e
+        # estava bom permanece intocado, mesmo que a IA repondra.
+        for campo in (
+            "descricao_produto",
+            "especificacao_tecnica",
+            "pagina_web",
+            "manual",
+        ):
+            if campo_vazio(registro[campo]):
+                novo = _texto(dados.get(campo))
+                if not campo_vazio(novo):
+                    registro[campo] = novo
+        atuais = _links(registro["fotos"])
+        registro["fotos"] = " | ".join(
+            atuais + [foto for foto in _links(dados.get("fotos")) if foto not in atuais]
+        )
     except Exception as erro:  # noqa: BLE001
         registro.update(status="erro", erro=f"{type(erro).__name__}: {erro}")
 
@@ -575,7 +613,9 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
             continue
         anterior = estado.get(chave)
         if esta_pendente(anterior):
-            pendentes.append((linha, int((anterior or {}).get("tentativas", 0)) + 1))
+            pendentes.append(
+                (linha, int((anterior or {}).get("tentativas", 0)) + 1, anterior)
+            )
 
     if args.limite:
         pendentes = pendentes[: args.limite]
@@ -627,8 +667,8 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                 fila = iter(pendentes)
                 futuros = {}
 
-                for linha, tentativas in itertools.islice(fila, args.workers * 2):
-                    futuros[pool.submit(processar_produto, linha, tentativas)] = linha
+                for linha, tentativas, anterior in itertools.islice(fila, args.workers * 2):
+                    futuros[pool.submit(processar_produto, linha, tentativas, anterior)] = linha
 
                 while futuros:
                     concluidos, _ = wait(futuros, return_when=FIRST_COMPLETED)
@@ -661,8 +701,10 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                     if dentro_do_prazo:
                         proximo = next(fila, None)
                         if proximo is not None:
-                            linha, tentativas = proximo
-                            futuros[pool.submit(processar_produto, linha, tentativas)] = linha
+                            linha, tentativas, anterior = proximo
+                            futuros[
+                                pool.submit(processar_produto, linha, tentativas, anterior)
+                            ] = linha
                     elif not esgotou_prazo:
                         esgotou_prazo = True
                         print(
