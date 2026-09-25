@@ -21,8 +21,12 @@ on:
         required: false
         default: '0'
 
-  # Sem agendamento: o catálogo está 100% enriquecido. Para rodar, use a aba
-  # Actions → "Run workflow" (disparo manual), que continua disponível.
+  # Roda todo dia às 6h de Brasília (9h UTC). Com a busca no DuckDuckGo
+  # (gratuita), cada execução diária avança o reprocessamento das lacunas —
+  # preenchendo apenas campos "Não encontrado"/vazios, sem reescrever o que
+  # já está bom. Disparo manual continua disponível.
+  schedule:
+    - cron: '0 9 * * *'
 
 # Impede duas execuções simultâneas: elas escreveriam no mesmo estado e
 # entrariam em conflito no commit de volta.
