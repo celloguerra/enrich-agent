@@ -1,5 +1,7 @@
 openai
-firecrawl>=4.4,<5
+ddgs
+requests
+beautifulsoup4
 pandas
 openpyxl
 python-dotenv

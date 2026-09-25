@@ -1,8 +1,8 @@
 """Agente de enriquecimento de produtos.
 
 Lê as partes CSV (``parte_*.csv``) versionadas no repositório, pesquisa cada
-produto na web (Firecrawl), extrai os dados com IA (OpenRouter) e grava uma
-planilha enriquecida por parte em ``./saida/``.
+produto na web (DuckDuckGo + extração das próprias páginas), extrai os dados
+com IA (OpenRouter) e grava uma planilha enriquecida por parte em ``./saida/``.
 
 Pensado para rodar sem intervenção humana no GitHub Actions:
 
@@ -58,6 +58,11 @@ BUSCAR_FOTOS = os.getenv("BUSCAR_FOTOS", "1").strip().lower() not in {"0", "fals
 # Quantas vezes um produto com erro volta para a fila em execuções seguintes.
 MAX_TENTATIVAS = int(os.getenv("MAX_TENTATIVAS", "3"))
 
+# Busca no DuckDuckGo: região dos resultados e intervalo mínimo global entre
+# chamadas (segundos) — o DDG bloqueia clientes que buscam rápido demais.
+REGIAO_BUSCA = os.getenv("REGIAO_BUSCA", "br-pt")
+INTERVALO_BUSCA = float(os.getenv("INTERVALO_BUSCA", "1.0"))
+
 # Colunas de negócio gravadas nas planilhas. Campos de controle (status, erro,
 # tentativas, atualizado_em) vivem apenas no JSONL de estado.
 COLUNAS_SAIDA = [
@@ -94,7 +99,7 @@ REGRAS IMPORTANTES:
 
 # Preenchidos por inicializar_clientes()
 cliente_ia: Any = None
-cliente_firecrawl: Any = None
+cliente_busca: Any = None
 
 
 def _aplicar_patch_ipv4() -> None:
@@ -124,18 +129,14 @@ def _aplicar_patch_ipv4() -> None:
 
 def inicializar_clientes() -> None:
     """Cria os clientes de IA e de busca a partir das variáveis de ambiente."""
-    global cliente_ia, cliente_firecrawl
+    global cliente_ia, cliente_busca
+    from ddgs import DDGS
     from openai import OpenAI
-    from firecrawl import Firecrawl
 
     openrouter_key = os.getenv("OPENROUTER_API_KEY")
-    firecrawl_key = os.getenv("FIRECRAWL_API_KEY")
     faltando = [
         nome
-        for nome, valor in (
-            ("OPENROUTER_API_KEY", openrouter_key),
-            ("FIRECRAWL_API_KEY", firecrawl_key),
-        )
+        for nome, valor in (("OPENROUTER_API_KEY", openrouter_key),)
         if not valor
     ]
     if faltando:
@@ -162,10 +163,10 @@ def inicializar_clientes() -> None:
         max_retries=2,
         timeout=120.0,
     )
-    cliente_firecrawl = Firecrawl(api_key=firecrawl_key)
+    cliente_busca = DDGS()
 
     _preflight_openrouter()
-    _preflight_firecrawl()
+    _preflight_busca()
 
 
 def _preflight_openrouter() -> None:
@@ -196,22 +197,28 @@ def _preflight_openrouter() -> None:
     print("   🔑 OpenRouter: credencial e modelo OK.", flush=True)
 
 
-def _preflight_firecrawl() -> None:
-    """Consulta o saldo de créditos do Firecrawl (não consome créditos)."""
+def _preflight_busca() -> None:
+    """Busca mínima no DuckDuckGo para falhar rápido (não precisa de chave).
+
+    O DDG bloqueia temporariamente clientes que buscam rápido demais; é melhor
+    descobrir isso no início do que produto a produto.
+    """
     try:
-        uso = cliente_firecrawl.get_credit_usage()
-        restantes = getattr(uso, "remaining_credits", None)
-        if restantes is not None:
-            print(f"   🔑 Firecrawl: credencial OK ({restantes} créditos restantes).", flush=True)
-        else:
-            print("   🔑 Firecrawl: credencial OK.", flush=True)
+        _com_retry(
+            lambda: cliente_busca.text("parafuso", region=REGIAO_BUSCA, max_results=1),
+            "verificação do DuckDuckGo",
+            tentativas=2,
+            espera_inicial=1.0,
+        )
     except Exception as erro:  # noqa: BLE001
         raise SystemExit(
-            "⚠️ O Firecrawl recusou a verificação de credencial — as buscas "
-            "falhariam para todos os produtos.\n"
+            "⚠️ O DuckDuckGo não respondeu à busca de teste — as buscas falhariam "
+            "para todos os produtos.\n"
             f"   erro: {erro}\n"
-            "   Confira FIRECRAWL_API_KEY (gere em https://firecrawl.dev)."
+            "   O DDG limita clientes muito rápidos: tente de novo em alguns minutos "
+            "ou reduza WORKERS/INTERVALO_BUSCA."
         ) from erro
+    print("   🔑 DuckDuckGo: busca OK (não precisa de chave).", flush=True)
 
 
 
@@ -324,79 +331,120 @@ def montar_consulta(linha: dict) -> str:
     return " ".join(partes)
 
 
-def pesquisar_na_web(consulta: str) -> dict:
-    """Busca textos e links usando Firecrawl (SDK v2).
+# Cadência global das buscas no DDG entre todas as threads.
+_trava_busca = threading.Lock()
+_proxima_busca_em = [0.0]
 
-    A busca principal pede o conteúdo das páginas (``scrape_options``) para dar
-    contexto à IA; as buscas de manual e de fotos devolvem apenas links, que
-    são mais baratas. Os resultados chegam como ``SearchData`` com as listas
-    ``.web`` e ``.images`` (``SearchResultWeb``/``Document``/``SearchResultImages``).
+
+def _pautar_busca() -> None:
+    """Garante um intervalo mínimo global entre chamadas ao DuckDuckGo.
+
+    O DDG bloqueia temporariamente clientes que buscam rápido demais; com
+    vários workers, o intervalo (``INTERVALO_BUSCA``) mantém a cadência
+    coletiva abaixo do limite.
+    """
+    with _trava_busca:
+        agora = time.monotonic()
+        espera = _proxima_busca_em[0] - agora
+        _proxima_busca_em[0] = max(agora, _proxima_busca_em[0]) + INTERVALO_BUSCA
+    if espera > 0:
+        time.sleep(espera)
+
+
+def _extrair_texto_pagina(url: str, limite: int = 2000) -> str:
+    """Baixa a página e extrai o texto principal ("" se não der).
+
+    O DDG devolve só título/URL/resumo; o conteúdo que alimenta a IA vem daqui.
+    Qualquer falha (rede, PDF, página gigante) devolve "" e o chamador cai
+    para o resumo da busca.
+    """
+    url = _texto(url)
+    if not url.startswith("http"):
+        return ""
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+
+        resposta = requests.get(
+            url,
+            timeout=8,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
+                )
+            },
+        )
+        resposta.raise_for_status()
+        if "html" not in resposta.headers.get("Content-Type", "").lower():
+            return ""
+        if len(resposta.content) > 2_000_000:
+            return ""
+        sopa = BeautifulSoup(resposta.content, "html.parser")
+        for tag in sopa(["script", "style", "noscript", "header", "footer", "nav", "form", "svg"]):
+            tag.decompose()
+        return re.sub(r"\s+", " ", sopa.get_text(" ")).strip()[:limite]
+    except Exception:  # noqa: BLE001 - rede/parse falham de muitos jeitos
+        return ""
+
+
+def pesquisar_na_web(consulta: str) -> dict:
+    """Busca textos e links usando DuckDuckGo (sem chave, sujeito a rate-limit).
+
+    O DDG devolve apenas título/URL/resumo, então as páginas da busca
+    principal são baixadas e têm o texto extraído para dar contexto à IA;
+    quando uma página falha, usa-se o resumo. Buscas de manual e fotos
+    devolvem só links, que são mais baratas.
     """
 
-    def _titulo(fonte) -> str:
-        titulo = getattr(fonte, "title", None)
-        if not titulo:
-            titulo = getattr(getattr(fonte, "metadata", None), "title", None)
-        return _texto(titulo)
-
-    def _url(fonte) -> str:
-        url = getattr(fonte, "url", None)
-        if not url:
-            url = getattr(getattr(fonte, "metadata", None), "url", None)
-        return _texto(url)
-
-    def _conteudo(fonte) -> str:
-        return _texto(
-            getattr(fonte, "markdown", None) or getattr(fonte, "description", None)
+    def _buscar_texto(consulta_busca: str, maximo: int) -> list:
+        _pautar_busca()
+        return _com_retry(
+            lambda: cliente_busca.text(
+                consulta_busca, region=REGIAO_BUSCA, max_results=maximo
+            )
+            or [],
+            "busca no DuckDuckGo",
         )
 
     contexto_texto = ""
 
     try:
-        resultado = _com_retry(
-            lambda: cliente_firecrawl.search(
-                f"{consulta} especificações técnicas manual",
-                limit=5,
-                scrape_options={"formats": ["markdown"], "only_main_content": True},
-            ),
-            "busca principal",
-        )
-        for fonte in getattr(resultado, "web", None) or []:
-            contexto_texto += (
-                f"\n--- Fonte: {_titulo(fonte)} (URL: {_url(fonte)}) ---\n"
-                f"{_conteudo(fonte)[:2000]}\n"
-            )
+        for resultado in _buscar_texto(f"{consulta} especificações técnicas manual", 5):
+            titulo = _texto(resultado.get("title"))
+            url = _texto(resultado.get("href") or resultado.get("url"))
+            contexto_texto += f"\n--- Fonte: {titulo} (URL: {url}) ---\n"
+            conteudo = _extrair_texto_pagina(url) or _texto(resultado.get("body"))
+            contexto_texto += f"{conteudo[:2000]}\n"
 
         if BUSCAR_MANUAL:
-            resultado_manual = _com_retry(
-                lambda: cliente_firecrawl.search(
-                    f"{consulta} manual do usuário PDF",
-                    limit=3,
-                ),
-                "busca de manual",
-            )
-            if getattr(resultado_manual, "web", None):
+            manuais = _buscar_texto(f"{consulta} manual do usuário PDF", 3)
+            if manuais:
                 contexto_texto += "\n=== POSSÍVEIS MANUAIS ===\n"
-                for fonte in resultado_manual.web:
-                    contexto_texto += f"- {_titulo(fonte)} (Link: {_url(fonte)})\n"
+                for resultado in manuais:
+                    titulo = _texto(resultado.get("title"))
+                    url = _texto(resultado.get("href") or resultado.get("url"))
+                    contexto_texto += f"- {titulo} (Link: {url})\n"
 
     except Exception as erro:  # noqa: BLE001
-        print(f"   ⚠️ Erro na busca Firecrawl: {erro}", flush=True)
+        print(f"   ⚠️ Erro na busca DuckDuckGo: {erro}", flush=True)
         contexto_texto = contexto_texto or "Erro ao buscar na web."
 
     fotos = []
     if BUSCAR_FOTOS:
         try:
-            resultado_fotos = _com_retry(
-                lambda: cliente_firecrawl.search(
-                    f"{consulta} produto imagem oficial",
-                    sources=["images"],
-                    limit=3,
-                ),
+            _pautar_busca()
+            imagens = _com_retry(
+                lambda: cliente_busca.images(
+                    f"{consulta} produto", region=REGIAO_BUSCA, max_results=3
+                )
+                or [],
                 "busca de fotos",
             )
-            for imagem in getattr(resultado_fotos, "images", None) or []:
-                url = _texto(getattr(imagem, "image_url", None)) or _url(imagem)
+            for imagem in imagens:
+                url = _texto(
+                    imagem.get("image") or imagem.get("thumbnail") or imagem.get("url")
+                )
                 if url and url not in fotos:
                     fotos.append(url)
         except Exception as erro:  # noqa: BLE001
