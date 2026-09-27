@@ -1,6 +1,6 @@
 {
-  "atualizado_em": "2026-09-26T17:46:01+00:00",
-  "duracao_segundos": 15586.4,
+  "atualizado_em": "2026-09-27T17:53:16+00:00",
+  "duracao_segundos": 12684.8,
   "completo": true,
   "total_produtos": 4230,
   "enriquecidos": 4230,
@@ -51,8 +51,8 @@
       "enriquecidos": 1000,
       "ok": 3,
       "com_erro": 997,
-      "novos_nesta_execucao": 997,
-      "erros_nesta_execucao": 997,
+      "novos_nesta_execucao": 995,
+      "erros_nesta_execucao": 995,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_4.xlsx",
         "saida/produtos_enriquecidos_parte_4.csv"
