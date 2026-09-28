@@ -21,12 +21,10 @@ on:
         required: false
         default: '0'
 
-  # Roda todo dia às 6h de Brasília (9h UTC). Com a busca no DuckDuckGo
-  # (gratuita), cada execução diária avança o reprocessamento das lacunas —
-  # preenchendo apenas campos "Não encontrado"/vazios, sem reescrever o que
-  # já está bom. Disparo manual continua disponível.
-  schedule:
-    - cron: '0 9 * * *'
+  # Sem agendamento: as rodadas são disparadas manualmente pela aba Actions
+  # ("Run workflow"). Para reativar o cron diário, descomente as duas linhas:
+  # schedule:
+  #   - cron: '0 9 * * *'
 
 # Impede duas execuções simultâneas: elas escreveriam no mesmo estado e
 # entrariam em conflito no commit de volta.
