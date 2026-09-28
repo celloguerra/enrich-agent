@@ -1,19 +1,19 @@
 {
-  "atualizado_em": "2026-09-28T17:05:26+00:00",
-  "duracao_segundos": 19930.7,
+  "atualizado_em": "2026-09-28T17:59:58+00:00",
+  "duracao_segundos": 3187.3,
   "completo": true,
-  "total_produtos": 4000,
-  "enriquecidos": 4000,
+  "total_produtos": 4230,
+  "enriquecidos": 4230,
   "restantes": 0,
   "partes": [
     {
       "parte": "parte_1.csv",
       "total": 1000,
       "enriquecidos": 1000,
-      "ok": 999,
-      "com_erro": 1,
-      "novos_nesta_execucao": 475,
-      "erros_nesta_execucao": 1,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 1,
+      "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_1.xlsx",
         "saida/produtos_enriquecidos_parte_1.csv"
@@ -23,10 +23,10 @@
       "parte": "parte_2.csv",
       "total": 1000,
       "enriquecidos": 1000,
-      "ok": 994,
-      "com_erro": 6,
-      "novos_nesta_execucao": 764,
-      "erros_nesta_execucao": 6,
+      "ok": 1000,
+      "com_erro": 0,
+      "novos_nesta_execucao": 6,
+      "erros_nesta_execucao": 0,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_2.xlsx",
         "saida/produtos_enriquecidos_parte_2.csv"
@@ -38,7 +38,7 @@
       "enriquecidos": 1000,
       "ok": 995,
       "com_erro": 5,
-      "novos_nesta_execucao": 991,
+      "novos_nesta_execucao": 5,
       "erros_nesta_execucao": 5,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_3.xlsx",
@@ -49,13 +49,26 @@
       "parte": "parte_4.csv",
       "total": 1000,
       "enriquecidos": 1000,
-      "ok": 820,
-      "com_erro": 180,
-      "novos_nesta_execucao": 826,
-      "erros_nesta_execucao": 9,
+      "ok": 986,
+      "com_erro": 14,
+      "novos_nesta_execucao": 180,
+      "erros_nesta_execucao": 14,
       "arquivos": [
         "saida/produtos_enriquecidos_parte_4.xlsx",
         "saida/produtos_enriquecidos_parte_4.csv"
+      ]
+    },
+    {
+      "parte": "parte_5.csv",
+      "total": 230,
+      "enriquecidos": 230,
+      "ok": 220,
+      "com_erro": 10,
+      "novos_nesta_execucao": 230,
+      "erros_nesta_execucao": 10,
+      "arquivos": [
+        "saida/produtos_enriquecidos_parte_5.xlsx",
+        "saida/produtos_enriquecidos_parte_5.csv"
       ]
     }
   ]
