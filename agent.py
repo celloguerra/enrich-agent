@@ -267,6 +267,26 @@ def _links(valor) -> list:
     return links
 
 
+def _eh_erro_de_credito(erro: Exception) -> bool:
+    """Créditos/credencial do provedor de IA esgotados (401/402/403).
+
+    Nesse estado nada na execução vai funcionar: melhor abortar limpo do que
+    queimar as tentativas de todos os produtos da fila.
+    """
+    if getattr(erro, "status_code", None) in (401, 402, 403):
+        return True
+    mensagem = str(erro).lower()
+    return any(
+        marcador in mensagem
+        for marcador in (
+            "error code: 401",
+            "error code: 402",
+            "error code: 403",
+            "insufficient credits",
+        )
+    )
+
+
 def _com_retry(operacao, descricao, tentativas=3, espera_inicial=2.0):
     """Executa ``operacao`` com backoff exponencial. Relança o último erro."""
     atraso = espera_inicial
@@ -277,6 +297,8 @@ def _com_retry(operacao, descricao, tentativas=3, espera_inicial=2.0):
             return operacao()
         except Exception as erro:  # noqa: BLE001 - rede/IA falham de muitos jeitos
             ultimo_erro = erro
+            if _eh_erro_de_credito(erro):
+                raise  # sem créditos/credencial não adianta repetir agora
             if tentativa >= tentativas:
                 break
             print(
@@ -481,6 +503,9 @@ def enriquecer_com_ia(nome_produto: str, contexto: dict) -> dict:
             ],
             response_format={"type": "json_object"},
             temperature=0.2,
+            # Respostas são JSONs pequenos; teto baixo reduz o custo por
+            # chamada e evita o 402 de "max_tokens acima do saldo".
+            max_tokens=1000,
         ),
         "chamada de IA",
     )
@@ -553,6 +578,8 @@ def processar_produto(linha: dict, tentativas: int, anterior: dict | None = None
             atuais + [foto for foto in _links(dados.get("fotos")) if foto not in atuais]
         )
     except Exception as erro:  # noqa: BLE001
+        if _eh_erro_de_credito(erro):
+            raise  # sobe para processar_parte abortar sem queimar tentativas
         registro.update(status="erro", erro=f"{type(erro).__name__}: {erro}")
 
     return registro
@@ -718,6 +745,7 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                 for linha, tentativas, anterior in itertools.islice(fila, args.workers * 2):
                     futuros[pool.submit(processar_produto, linha, tentativas, anterior)] = linha
 
+                erro_de_credito = None
                 while futuros:
                     concluidos, _ = wait(futuros, return_when=FIRST_COMPLETED)
                     for futuro in concluidos:
@@ -726,6 +754,12 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                         try:
                             registro = futuro.result()
                         except Exception as erro:  # noqa: BLE001 - nunca perder o lote
+                            if _eh_erro_de_credito(erro):
+                                # Créditos/credencial da IA esgotados: aborta a
+                                # parte SEM gravar estes produtos — a fila fica
+                                # intacta para a próxima execução.
+                                erro_de_credito = erro
+                                break
                             registro = {
                                 "idsubproduto": _texto(linha.get("idsubproduto")),
                                 "nome_produto": _texto(linha.get("descricaoproduto")),
@@ -745,6 +779,9 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                             print(f"      motivo: {registro.get('erro', '')}", flush=True)
                         gravar(registro)
 
+                    if erro_de_credito is not None:
+                        break
+
                     dentro_do_prazo = prazo is None or time.monotonic() < prazo
                     if dentro_do_prazo:
                         proximo = next(fila, None)
@@ -760,6 +797,15 @@ def processar_parte(parte: Path, args, prazo: float | None) -> dict:
                             "e preservando o progresso.",
                             flush=True,
                         )
+
+            if erro_de_credito is not None:
+                print(
+                    f"\n   🛑 Créditos/credencial do OpenRouter esgotados: {erro_de_credito}\n"
+                    "   🛑 Execução interrompida SEM queimar tentativas — a fila "
+                    "continua válida. Recarregue em https://openrouter.ai/credits "
+                    "e rode de novo.",
+                    flush=True,
+                )
 
     # Reconstitui a parte inteira na ordem original do CSV, mais os produtos
     # que saíram do CSV mas já estavam prontos no estado. Feito fora do

@@ -1,7 +1,8 @@
 """Recoloca na fila os produtos que têm campos “Não encontrado”/vazios.
 
 Lê o estado do agente (``saida/estado_parte_*.jsonl``), identifica os
-registros ``ok`` com lacunas usando as mesmas regras da auditoria
+registros ``ok`` **e ``erro``** (inclusive esgotados, com tentativas esgotadas)
+que têm lacunas usando as mesmas regras da auditoria
 (``auditar_enriquecimento.py``) e grava uma nova linha de estado com
 ``status: erro`` e ``tentativas: 0`` — o produto volta à fila na próxima
 execução do agente.
@@ -100,7 +101,9 @@ def main(argv=None) -> int:
 
         alvo = []
         for registro in registros.values():
-            if registro.get("status") != "ok":
+            # 'ok' com lacuna volta para preencher; 'erro' (inclusive esgotado,
+            # tentativas >= MAX) é resgatado — senão nunca mais seria tentado.
+            if registro.get("status") not in ("ok", "erro"):
                 continue
             total_ok += 1
             lacunas = lacunas_do(registro)
